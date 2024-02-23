@@ -1,0 +1,75 @@
+name: QMK Build
+
+permissions:
+  contents: read
+
+on:
+  push:
+    branches: [master, develop]
+  workflow_dispatch:
+    inputs:
+      branch:
+        type: choice
+        description: 'Branch to build'
+        options: [master, develop]
+
+concurrency:
+  group: QMK_build-${{ github.event.inputs.branch || github.ref_name }}
+  cancel-in-progress: true
+
+jobs:
+  QMK_build:
+    if: github.repository == 'timherrm/vial-qmk'
+    name: "QMK Build"
+    runs-on: ubuntu-latest
+    timeout-minutes: 1380
+
+    strategy:
+      fail-fast: false
+      matrix:
+        compilefor: [crkbd/rev1_vial, redox/rev1_german, redox/rev1_vial]
+
+    container: ghcr.io/qmk/qmk_cli
+
+    steps:
+
+    - name: Extract Matrix Variables
+      run: |
+        matrix_value="${{ matrix.compilefor }}"
+        keyboard="${matrix_value%%_*}"
+        keymap="${matrix_value#*_}"
+        keyboard_escaped="${keyboard//\//_}"
+
+        echo "keyboard=$keyboard" >> $GITHUB_ENV
+        echo "keymap=$keymap" >> $GITHUB_ENV
+        echo "keyboard_escaped=$keyboard_escaped" >> $GITHUB_ENV
+      shell: bash
+
+    - name: Disable safe.directory check
+      run : git config --global --add safe.directory '*'
+
+    - uses: actions/checkout@v4
+      with:
+        submodules: recursive
+        ref: ${{ github.event.inputs.branch || github.ref }}
+
+    - name: Install dependencies
+      run: pip3 install -r requirements.txt
+
+    - name: Run `qmk compile` (${{ matrix.compilefor }})
+      run: |
+        qmk compile -kb $keyboard -km $keymap -e DUMP_CI_METADATA=yes || touch .failed
+        # Exit with failure if the compilation stage failed
+        [ ! -f .failed ] || exit 1
+
+    - name: Debug
+      run: ls -la
+
+    - name: 'Upload artifacts'
+      uses: actions/upload-artifact@v4
+      if: always()
+      with:
+        name: ${{ env.keyboard_escaped }}_${{ env.keymap }}
+        if-no-files-found: ignore
+        path: |
+          *.hex
